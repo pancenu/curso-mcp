@@ -157,3 +157,231 @@ Roles claros:
 <!-- Por Javier Medel -->
 
 Para configurar el File System MCP y restringir el acceso solo a la carpeta sample_files, debes asegurarte de que al crear tu MCP server, especifiques el directorio de trabajo y limites los permisos de acceso. En el código, al implementar la función get Azure OpenAI Client, puedes definir el contexto del sistema de archivos, especificando que solo se puede acceder a la carpeta sample_files. Esto se realiza mediante la configuración adecuada en el código del agente, asegurando que el entorno esté controlado y que los prompts solo hagan referencia a esa carpeta.
+
+---
+<!--Por Juan Sebastián Martinez Caldas -->
+Casi no puedo lograr esta clase, así que comparto el codigo que me funcionó en Windows por si a alguien le sirve:
+
+```
+import asyncio
+
+import os
+
+from agents import Agent, OpenAIResponsesModel, Runner
+
+from agents.mcp import MCPServerStdio
+
+from dotenv import load_dotenv
+
+from openai import AsyncAzureOpenAI
+
+import os, shutil
+
+import shutil
+
+def resolve_fs_server_command(data_dir: str):
+
+    # A) Usar npx por ruta absoluta
+
+    npx = shutil.which("npx") or r"C:\Program Files\nodejs\npx.cmd"
+
+    if npx and os.path.isfile(npx):
+
+        return npx, ["-y", "@modelcontextprotocol/server-filesystem", data_dir]
+
+    # B) Fallback: node + dist/index.js (usando npm root -g)
+
+    node = shutil.which("node") or r"C:\Program Files\nodejs\node.exe"
+
+    js = os.path.join(r"C:\Program Files\nodejs\node_modules",
+
+                      "@modelcontextprotocol", "server-filesystem", "dist", "index.js")
+
+    if node and os.path.isfile(node) and os.path.isfile(js):
+
+        return node, [js, data_dir]
+
+    raise FileNotFoundError(
+
+        "No encontré npx ni node+dist/index.js. Verifica tu instalación de Node.js."
+
+    )
+
+def resolve_mcp_command():
+
+    # 1) Intenta server-filesystem global (rápido y sin npx)
+
+    appdata = os.environ.get("APPDATA", "")
+
+    candidate = os.path.join(appdata, "npm", "server-filesystem.cmd")
+
+    if os.path.isfile(candidate):
+
+        return candidate, "server-filesystem"
+
+    # 2) Si no existe, intenta encontrar npx absoluto
+
+    npx = shutil.which("npx") or r"C:\Program Files\nodejs\npx.cmd"
+
+    if npx and os.path.isfile(npx):
+
+        return npx, "npx"
+
+    # 3) Último recurso: falla explícito con mensaje claro
+
+    raise FileNotFoundError(
+
+        "No pude encontrar 'server-filesystem.cmd' ni 'npx'. "
+
+        "Instala Node.js y/o ejecuta: npm i -g @modelcontextprotocol/server-filesystem"
+
+    )
+
+def get_azure_openai_client():
+
+    load_dotenv()
+
+    return AsyncAzureOpenAI(
+
+        api_key=os.getenv("AZURE_OPENAI_API_KEY"),
+
+        azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
+
+        api_version=os.getenv("AZURE_OPENAI_API_VERSION"),
+
+    )
+
+async def run_with_tools(mcp_server):
+
+    azure_openai_client = get_azure_openai_client()
+
+    model = OpenAIResponsesModel(
+
+        model=os.getenv("AZURE_OPENAI_CHAT_DEPLOYMENT_NAME"),  # deployment name en Azure
+
+        openai_client=azure_openai_client,
+
+    )
+
+    agent = Agent(
+
+        name="Azure AI Foundry Agent",
+
+        instructions="Usa las herramientas para leer los archivos del sistema y responder preguntas basadas en esos archivos.",
+
+        model=model,
+
+        mcp_servers=[mcp_server],
+
+    )
+
+    msg = "Lee los archivos en la carpeta 'data' y enlista los nombres de los archivos."
+
+    print(f"[Agent] Ejecutando: {msg}")
+
+    result = await Runner.run(starting_agent=agent, input=msg)
+
+    print(result.final_output)
+
+    msg = "¿Cuál es mi libro favorito? Mira el archivo 'libros_favoritos.txt'."
+
+    print(f"[Agent] Ejecutando: {msg}")
+
+    result = await Runner.run(starting_agent=agent, input=msg)
+
+    print(result.final_output)
+
+async def main():
+
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+
+    data_dir = os.path.abspath(os.path.join(current_dir, "data"))
+
+    cmd, args = resolve_fs_server_command(data_dir)
+
+    print("[MCP] Lanzando filesystem server:", cmd, args)
+
+    async with MCPServerStdio(
+
+        name="File system server",
+
+        params={"command": cmd, "args": args, "cwd": current_dir},
+
+    ) as mcp_server:
+
+        print("[MCP] Servidor inicializado; preparando tools MCP…")
+
+        # Debug: ver qué herramientas están disponibles
+
+        print(f"[MCP] Tipo de servidor: {type(mcp_server).__name__}")
+
+        print(f"[MCP] Tiene 'initialize': {hasattr(mcp_server, 'initialize')}")
+
+        print(f"[MCP] Tiene 'describe': {hasattr(mcp_server, 'describe')}")
+
+        print(f"[MCP] Tiene 'list_tools': {hasattr(mcp_server, 'list_tools')}")
+
+       
+
+        # Usar list_tools() que SI existe en MCPServerStdio
+
+        if hasattr(mcp_server, "list_tools") and callable(getattr(mcp_server, "list_tools")):
+
+            try:
+
+                tools = await mcp_server.list_tools()
+
+                print(f"[MCP] Herramientas disponibles: {len(tools)} encontradas")
+
+                for tool in tools:
+
+                    tool_name = getattr(tool, 'name', str(tool))
+
+                    print(f"  - {tool_name}")
+
+            except Exception as e:
+
+                print(f"[MCP] Error listando herramientas: {e}")
+
+        else:
+
+            print("[MCP] El servidor NO tiene metodo 'list_tools()' disponible")
+
+        # Pasar el servidor MCP directamente al agente
+
+        await run_with_tools(mcp_server)
+
+if __name__ == "__main__":
+
+    asyncio.run(main())
+
+mi pyproject es: [project]
+
+name = "mcp-class"
+
+version = "0.1.0"
+
+description = "Add your description here"
+
+readme = "README.md"
+
+requires-python = ">=3.10"
+
+dependencies = [
+
+"azure-ai-inference>=1.0.0b9",
+
+"azure-core>=1.36.0",
+
+"mcp[cli]>=1.17.0",
+
+"openai>=2.6.1",
+
+"openai-agents>=0.4.2",
+
+"python-dotenv>=1.1.1",
+
+"uvicorn>=0.37.0",
+
+]
+```

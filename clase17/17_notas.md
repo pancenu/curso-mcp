@@ -54,12 +54,18 @@ Deberías actualizar el contexto cada vez que el usuario introduzca un dato nuev
 <!---Andrea Alexandra Mora Vega--->
 
 Idea central (qué es contexto dinámico)
+
 El contexto no es todo lo que ha pasado.
+
 Es solo lo que el sistema decide que es relevante ahora.
 
+
 En MCP:
+
 El LLM no gestiona el contexto
+
 El MCP Server sí
+
 El contexto se construye, se filtra y se descarta
 
 ---
